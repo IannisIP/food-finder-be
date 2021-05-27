@@ -1,7 +1,6 @@
 const AFINN = require("./afinn.json");
 
 const getWords = (text) => {
-	console.log(text);
 	return text.toLowerCase().split(" ");
 };
 
@@ -10,12 +9,10 @@ const getScore = (word) => {
 };
 
 const removeRestrictedCharacters = (word) => {
-	console.log(word);
 	return word.replace(/[^\w]/g, "");
 };
 
 const sum = (accumultor, currentValue) => {
-	console.log(accumultor);
 	return accumultor + currentValue;
 };
 
@@ -25,5 +22,7 @@ const analyseText = (text) => {
 		.map(getScore)
 		.reduce(sum);
 };
+
+//folosire translate pt unicitate limba
 
 module.exports = { analyseText };

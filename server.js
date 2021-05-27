@@ -5,6 +5,8 @@ var cors = require("cors");
 const axios = require("axios");
 const bcrypt = require("bcrypt");
 const Analyzer = require("./sentiment-analysis/sentiment-analysis");
+const jwt = require("jsonwebtoken");
+const config = require("./config");
 
 require("events").EventEmitter.prototype._maxListeners = 100;
 
@@ -60,6 +62,26 @@ app.get("/restaurants", cors(corsOptions), async (req, res) => {
 			console.log(error);
 		});
 });
+
+const computeSentiment = (score) => {
+	let sentiment = "";
+	if (score >= 5) {
+		sentiment = "positive";
+	} else if (-5 < score < 5) {
+		sentiment = "neutral";
+	} else {
+		sentiment = "negative";
+	}
+	return sentiment;
+};
+
+const addReviewSentiment = (reviews) => {
+	reviews.forEach((review) => {
+		const score = Analyzer.analyseText(review.text);
+		review.sentiment = computeSentiment(score);
+	});
+};
+
 app.get("/details", cors(corsOptions), async (req, res) => {
 	const placeId = req.query.placeId;
 
@@ -68,7 +90,9 @@ app.get("/details", cors(corsOptions), async (req, res) => {
 			`https://maps.googleapis.com/maps/api/place/details/json?placeid=${placeId}&key=AIzaSyDrgODbH6IHZ-myEbrGfti-FfHrBv9X9WA`
 		)
 		.then((response) => {
-			res.json(response.data.result);
+			const result = response.data.result;
+			result.reviews && addReviewSentiment(result.reviews);
+			res.json(result);
 		})
 		.catch((error) => {
 			console.log(error);
@@ -108,15 +132,22 @@ app.post("/users", cors(corsOptions), async (req, res) => {
 			return;
 		}
 
-		await addUser(user);
+		const token = jwt.sign({ email: user.email }, config.secret, {
+			expiresIn: 86400, // expires in 24 hours
+		});
 
-		res.status(201).send('{"message":"users-added"}');
+		await addUser(user);
+		res
+			.status(200)
+			.send({ message: "user-added", auth: true, token: token, user: user });
 	} catch (err) {
 		console.log(err);
 
 		res.status(500).send();
 	}
 });
+
+app.get("/users/login");
 
 app.post("/users/login", cors(corsOptions), async (req, res) => {
 	const email = req.body.email;
@@ -129,27 +160,117 @@ app.post("/users/login", cors(corsOptions), async (req, res) => {
 		return res.status(400).send('{"message": "Cannot find user"}');
 	}
 	try {
-		if (await bcrypt.compare(req.body.password, user.password)) {
-			res.send("Success");
+		const passwordIsValid = bcrypt.compareSync(
+			req.body.password,
+			user.password
+		);
+		if (passwordIsValid) {
+			let token = jwt.sign({ email: user.email }, config.secret, {
+				expiresIn: 86400, // expires in 24 hours
+			});
+			res
+				.status(200)
+				.send({ message: "Auth ok", auth: true, token: token, user: user });
 		} else {
-			res.send("Not Allowed");
+			res.status(401).send({
+				message: "Username or password wrong",
+				auth: false,
+				token: null,
+			});
 		}
-	} catch {
-		res.status(500).send();
+	} catch (e) {
+		res.status(500).send(e);
 	}
+});
+
+app.get("/user-info", (req, res) => {
+	var token = req.headers["x-access-token"];
+	if (!token)
+		return res.status(401).send({ auth: false, message: "No token provided." });
+
+	jwt.verify(token, config.secret, async (err, userInfo) => {
+		if (err)
+			return res
+				.status(500)
+				.send({ auth: false, message: "Failed to authenticate token." });
+
+		const users = await getAllUsers();
+		const user = users.find((user) => user.email === userInfo.email);
+
+		res.status(200).send(user);
+	});
 });
 
 app.post("/analyse", cors(corsOptions), (req, res) => {
 	const text = req.body.text;
 	const score = Analyzer.analyseText(text);
 
-	if (score >= 5) {
-		res.json("{sentiment: positive}");
-	} else if (-5 < score < 5) {
-		res.json("{sentiment: neutral}");
-	} else {
-		res.json("{sentiment: negative}");
+	const sentiment = computeSentiment(score);
+
+	res.json(`{sentiment: ${sentiment}}`);
+});
+
+app.post("/review", cors(corsOptions), async (req, res) => {
+	const review = {
+		userId: req.body.userId,
+		placeId: req.body.placeId,
+		text: req.body.text,
+	};
+
+	try {
+		await pool.query(
+			"INSERT INTO reviews (userId,placeId,text,timestamp) VALUES(?,?,?, NOW())",
+			[review.userId, review.placeId, review.text]
+		);
+	} catch (e) {
+		console.error(e);
+		res.status(500).send(e);
 	}
+	res.contentType("application/json");
+
+	res.status(201).json({ message: "review-added" });
+});
+
+app.post("/reportedreviews", cors(corsOptions), async (req, res) => {
+	const reportedReview = {
+		userId: req.body.userId,
+		reviewId: req.body.reviewId,
+		reason: req.body.reason,
+	};
+
+	try {
+		await pool.query("INSERT INTO reportedreviews SET ?", {
+			userId: reportedReview.userId,
+			reviewId: reportedReview.reviewId,
+			reason: reportedReview.reason,
+		});
+	} catch (e) {
+		console.error(e);
+		res.status(500).send(e);
+	}
+	res.contentType("application/json");
+
+	res.status(201).json({ message: "reported-review-added" });
+});
+
+app.post("/blacklist", cors(corsOptions), async (req, res) => {
+	const reportedReview = {
+		userId: req.body.userId,
+		reason: req.body.reason,
+	};
+
+	try {
+		await pool.query("INSERT INTO blacklist SET ?", {
+			userId: reportedReview.userId,
+			reason: reportedReview.reason,
+		});
+	} catch (e) {
+		console.error(e);
+		res.status(500).send(e);
+	}
+	res.contentType("application/json");
+
+	res.status(201).json({ message: "reported-review-added" });
 });
 
 const port = process.env.PORT || 3001;
