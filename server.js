@@ -112,6 +112,7 @@ app.get("/details", cors(corsOptions), async (req, res) => {
 				return {
 					author_name: `${user["first_name"]} ${user["last_name"]}`,
 					text: review.text,
+					confirmed: review.receipt ? true : false,
 				};
 			});
 
