@@ -7,6 +7,8 @@ const bcrypt = require("bcrypt");
 const Analyzer = require("./sentiment-analysis/sentiment-analysis");
 const jwt = require("jsonwebtoken");
 const config = require("./config");
+const Storage = require("./storage");
+const pify = require("pify");
 
 require("events").EventEmitter.prototype._maxListeners = 100;
 
@@ -183,22 +185,38 @@ app.post("/users/login", cors(corsOptions), async (req, res) => {
 	}
 });
 
-app.get("/user-info", (req, res) => {
-	var token = req.headers["x-access-token"];
-	if (!token)
-		return res.status(401).send({ auth: false, message: "No token provided." });
+const validateUser = async (token) => {
+	if (!token) return { auth: false, message: "No token provided." };
 
-	jwt.verify(token, config.secret, async (err, userInfo) => {
-		if (err)
-			return res
-				.status(500)
-				.send({ auth: false, message: "Failed to authenticate token." });
+	return await new Promise((resolve) => {
+		jwt.verify(token, config.secret, async (err, userInfo) => {
+			if (err)
+				return resolve({
+					auth: false,
+					message: "Failed to authenticate token.",
+				});
 
-		const users = await getAllUsers();
-		const user = users.find((user) => user.email === userInfo.email);
+			const users = await getAllUsers();
+			const user = users.find((user) => user.email === userInfo.email);
 
-		res.status(200).send(user);
+			resolve(user);
+		});
 	});
+};
+
+app.get("/user-info", async (req, res) => {
+	const token = req.headers["x-access-token"];
+	const results = await validateUser(token);
+
+	if (!results.auth) {
+		if (results.message === "No token provided.") {
+			return res.status(401).send(results);
+		} else {
+			return res.status(500).send(results);
+		}
+	}
+
+	res.status(200).send(results);
 });
 
 app.post("/analyse", cors(corsOptions), (req, res) => {
@@ -211,16 +229,28 @@ app.post("/analyse", cors(corsOptions), (req, res) => {
 });
 
 app.post("/review", cors(corsOptions), async (req, res) => {
+	const token = req.headers["x-access-token"];
+	const user = await validateUser(token);
+	const multerInstance = pify(Storage.upload(user.id).single("receipt"));
+
+	try {
+		await multerInstance(req, res);
+	} catch (err) {
+		console.log(err);
+		// An error occurred when uploading
+	}
+
 	const review = {
-		userId: req.body.userId,
+		userId: user.id,
 		placeId: req.body.placeId,
-		text: req.body.text,
+		text: req.body.review,
+		receipt: req.file.path || "",
 	};
 
 	try {
 		await pool.query(
-			"INSERT INTO reviews (userId,placeId,text,timestamp) VALUES(?,?,?, NOW())",
-			[review.userId, review.placeId, review.text]
+			"INSERT INTO reviews (userId,placeId,text,receipt,timestamp) VALUES(?,?,?,?, NOW())",
+			[review.userId, review.placeId, review.text, review.receipt]
 		);
 	} catch (e) {
 		console.error(e);
