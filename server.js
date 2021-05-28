@@ -81,6 +81,15 @@ const addReviewSentiment = (reviews) => {
 	reviews.forEach((review) => {
 		const score = Analyzer.analyseText(review.text);
 		review.sentiment = computeSentiment(score);
+
+		if (review.rating === undefined) {
+			review.rating =
+				review.sentiment === "positive"
+					? 5
+					: review.sentiment === "neutral"
+					? 3
+					: 1;
+		}
 	});
 };
 
@@ -91,15 +100,38 @@ app.get("/details", cors(corsOptions), async (req, res) => {
 		.get(
 			`https://maps.googleapis.com/maps/api/place/details/json?placeid=${placeId}&key=AIzaSyDrgODbH6IHZ-myEbrGfti-FfHrBv9X9WA`
 		)
-		.then((response) => {
+		.then(async (response) => {
 			const result = response.data.result;
-			result.reviews && addReviewSentiment(result.reviews);
+
+			const users = await getAllUsers();
+			const reviews = await getReviewsByPlaceId(result.reference);
+
+			const userReviews = reviews.map((review) => {
+				const user = users.find((user) => user.id === review.userId);
+
+				return {
+					author_name: `${user["first_name"]} ${user["last_name"]}`,
+					text: review.text,
+				};
+			});
+
+			result.reviews = [...result.reviews, ...userReviews];
+
+			result.reviews.length && addReviewSentiment(result.reviews);
+
 			res.json(result);
 		})
 		.catch((error) => {
 			console.log(error);
 		});
 });
+
+const getReviewsByPlaceId = async (placeId) => {
+	const result = await pool.query("SELECT * from reviews WHERE placeId = ?", [
+		placeId,
+	]);
+	return result[0];
+};
 
 const getAllUsers = async () => {
 	const result = await pool.query("SELECT * from users");
@@ -208,12 +240,10 @@ app.get("/user-info", async (req, res) => {
 	const token = req.headers["x-access-token"];
 	const results = await validateUser(token);
 
-	if (!results.auth) {
-		if (results.message === "No token provided.") {
-			return res.status(401).send(results);
-		} else {
-			return res.status(500).send(results);
-		}
+	if (results.message === "No token provided.") {
+		return res.status(401).send(results);
+	} else if (results.message === "Failed to authenticate token.") {
+		return res.status(500).send(results);
 	}
 
 	res.status(200).send(results);
