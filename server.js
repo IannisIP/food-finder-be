@@ -93,38 +93,44 @@ const addReviewSentiment = (reviews) => {
 	});
 };
 
+const getPlaceDetails = async (placeId) => {
+	try {
+		const response = await axios.get(
+			`https://maps.googleapis.com/maps/api/place/details/json?placeid=${placeId}&key=AIzaSyDrgODbH6IHZ-myEbrGfti-FfHrBv9X9WA`
+		);
+		const placeDetails = response.data.result;
+
+		const users = await getAllUsers();
+		const reviews = await getReviewsByPlaceId(placeDetails.reference);
+
+		const userReviews = reviews.map((review) => {
+			const user = users.find((user) => user.id === review.userId);
+
+			return {
+				author_name: `${user["first_name"]} ${user["last_name"]}`,
+				text: review.text,
+				confirmed: review.receipt ? true : false,
+			};
+		});
+
+		placeDetails.reviews = [...placeDetails.reviews, ...userReviews];
+
+		placeDetails.reviews.length && addReviewSentiment(placeDetails.reviews);
+
+		return placeDetails;
+	} catch (e) {
+		return e;
+	}
+};
+
 app.get("/details", cors(corsOptions), async (req, res) => {
 	const placeId = req.query.placeId;
-
-	axios
-		.get(
-			`https://maps.googleapis.com/maps/api/place/details/json?placeid=${placeId}&key=AIzaSyDrgODbH6IHZ-myEbrGfti-FfHrBv9X9WA`
-		)
-		.then(async (response) => {
-			const result = response.data.result;
-
-			const users = await getAllUsers();
-			const reviews = await getReviewsByPlaceId(result.reference);
-
-			const userReviews = reviews.map((review) => {
-				const user = users.find((user) => user.id === review.userId);
-
-				return {
-					author_name: `${user["first_name"]} ${user["last_name"]}`,
-					text: review.text,
-					confirmed: review.receipt ? true : false,
-				};
-			});
-
-			result.reviews = [...result.reviews, ...userReviews];
-
-			result.reviews.length && addReviewSentiment(result.reviews);
-
-			res.json(result);
-		})
-		.catch((error) => {
-			console.log(error);
-		});
+	const placeDetails = await getPlaceDetails(placeId);
+	if (placeDetails) {
+		res.status(200).json(placeDetails);
+	} else {
+		res.status(500).json(placeDetails);
+	}
 });
 
 const getReviewsByPlaceId = async (placeId) => {
@@ -134,8 +140,25 @@ const getReviewsByPlaceId = async (placeId) => {
 	return result[0];
 };
 
+const getAllPendingReviews = async () => {
+	const result = await pool.query("SELECT * from pendingreviews");
+	return result[0];
+};
+
+const getPendingReviewById = async (pendingReviewId) => {
+	const result = await pool.query("select * from pendingreviews WHERE id=?", [
+		pendingReviewId,
+	]);
+	return result[0];
+};
+
 const getAllUsers = async () => {
 	const result = await pool.query("SELECT * from users");
+	return result[0];
+};
+
+const getUserById = async (userId) => {
+	const result = await pool.query("SELECT * from users where id = ?", [userId]);
 	return result[0];
 };
 
@@ -237,6 +260,21 @@ const validateUser = async (token) => {
 	});
 };
 
+const validJWTNeeded = (req, res, next) => {
+	if (req.headers["x-access-token"]) {
+		try {
+			let authorization = req.headers["x-access-token"];
+			req.jwt = jwt.verify(authorization, config.secret);
+
+			return next();
+		} catch (err) {
+			return res.status(403).send();
+		}
+	} else {
+		return res.status(401).send();
+	}
+};
+
 app.get("/user-info", async (req, res) => {
 	const token = req.headers["x-access-token"];
 	const results = await validateUser(token);
@@ -259,7 +297,7 @@ app.post("/analyse", cors(corsOptions), (req, res) => {
 	res.json(`{sentiment: ${sentiment}}`);
 });
 
-app.post("/review", cors(corsOptions), async (req, res) => {
+app.post("/reviews/pending", cors(corsOptions), async (req, res) => {
 	const token = req.headers["x-access-token"];
 	const user = await validateUser(token);
 	const multerInstance = pify(Storage.upload(user.id).single("receipt"));
@@ -275,12 +313,12 @@ app.post("/review", cors(corsOptions), async (req, res) => {
 		userId: user.id,
 		placeId: req.body.placeId,
 		text: req.body.review,
-		receipt: req.file.path || "",
+		receipt: req.file ? req.file.path : "",
 	};
 
 	try {
 		await pool.query(
-			"INSERT INTO reviews (userId,placeId,text,receipt,timestamp) VALUES(?,?,?,?, NOW())",
+			"INSERT INTO pendingreviews (userId,placeId,text,receipt,timestamp) VALUES(?,?,?,?, NOW())",
 			[review.userId, review.placeId, review.text, review.receipt]
 		);
 	} catch (e) {
@@ -290,6 +328,69 @@ app.post("/review", cors(corsOptions), async (req, res) => {
 	res.contentType("application/json");
 
 	res.status(201).json({ message: "review-added" });
+});
+
+app.get(
+	"/reviews/pending",
+	cors(corsOptions),
+	validJWTNeeded,
+	async (req, res) => {
+		res.contentType("application/json");
+
+		try {
+			const pendingreviews = await getAllPendingReviews();
+			const placeReviews = await Promise.all(
+				pendingreviews.map(async (pendingReview) => {
+					const { id, placeId, userId, text, receipt, timestamp } =
+						pendingReview;
+					const placeDetails = await getPlaceDetails(placeId);
+					const reviewer = await getUserById(userId);
+
+					return {
+						...placeDetails,
+						pendingReviewId: id,
+						pendingReviewText: text,
+						pendingReviewDate: timestamp,
+						hasReceipt: Boolean(receipt),
+						reviewer: reviewer[0],
+					};
+				})
+			);
+			res.status(201).json(placeReviews);
+		} catch (e) {
+			console.error(e);
+			res.status(500).send(e);
+		}
+	}
+);
+
+app.post("/reviews", cors(corsOptions), validJWTNeeded, async (req, res) => {
+	const pendingReviewId = req.body.id;
+	const operation = req.body.operation;
+
+	const [review] = await getPendingReviewById(pendingReviewId);
+
+	try {
+		if (operation === "accept") {
+			await pool.query(
+				"INSERT INTO reviews (userId,placeId,text,receipt,timestamp) VALUES(?,?,?,?, NOW())",
+				[review.userId, review.placeId, review.text, review.receipt]
+			);
+			await pool.query("DELETE FROM pendingreviews WHERE id = ?", [
+				pendingReviewId,
+			]);
+		} else if (operation === "decline") {
+			await pool.query("DELETE FROM pendingreviews WHERE id = ?", [
+				pendingReviewId,
+			]);
+		}
+	} catch (e) {
+		console.error(e);
+		res.status(500).send(e);
+	}
+	res.contentType("application/json");
+
+	res.status(201).json({ message: "Operation completed" });
 });
 
 app.post("/reportedreviews", cors(corsOptions), async (req, res) => {
@@ -332,6 +433,20 @@ app.post("/blacklist", cors(corsOptions), async (req, res) => {
 	res.contentType("application/json");
 
 	res.status(201).json({ message: "reported-review-added" });
+});
+
+app.get("/receipt/download", validJWTNeeded, async (req, res) => {
+	const pendingReviewId = parseInt(req.query.review);
+
+	const [{ receipt }] = await getPendingReviewById(pendingReviewId);
+
+	const file = `${receipt}`;
+	res.status(200).download(file, (error) => {
+		if (error) {
+			console.error(error);
+			res.status(500).send({ message: "Failed to retrieve receipt!" });
+		}
+	});
 });
 
 const port = process.env.PORT || 3001;
