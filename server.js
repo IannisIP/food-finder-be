@@ -68,9 +68,9 @@ app.get("/restaurants", cors(corsOptions), async (req, res) => {
 
 const computeSentiment = (score) => {
 	let sentiment = "";
-	if (score >= 5) {
+	if (score > 2) {
 		sentiment = "positive";
-	} else if (-5 < score < 5) {
+	} else if (-2 < score && score < 2) {
 		sentiment = "neutral";
 	} else {
 		sentiment = "negative";
@@ -78,8 +78,28 @@ const computeSentiment = (score) => {
 	return sentiment;
 };
 
-const addReviewSentiment = (reviews) => {
-	reviews.forEach((review) => {
+// const translateText = async (text) => {
+// 	try {
+// 		const response = await axios.get(
+// 			`https://api-translate.systran.net/translation/text/translate?source=auto&target=en&input=${text}&key=04a36ab1-e9fb-4984-ab03-ef9f0de59971`
+// 		);
+// 		const jsonResponse = await response.data;
+// 		return jsonResponse.outputs[0].output;
+// 	} catch (e) {
+// 		//throws if text is already in english.
+// 	}
+// };
+
+const asyncForEach = async (array, callback) => {
+	for (let index = 0; index < array.length; index++) {
+		await callback(array[index], index, array);
+	}
+};
+
+const addReviewSentiment = async (reviews) => {
+	await asyncForEach(reviews, async (review) => {
+		//const translatedReview = await translateText(review.text);
+		//const score = Analyzer.analyseText(translatedReview || review.text);
 		const score = Analyzer.analyseText(review.text);
 		review.sentiment = computeSentiment(score);
 
@@ -121,7 +141,9 @@ const getPlaceDetails = async (placeId) => {
 
 		placeDetails.reviews = [...placeDetails.reviews, ...userReviews];
 
-		placeDetails.reviews.length && addReviewSentiment(placeDetails.reviews);
+		if (placeDetails.reviews.length) {
+			await addReviewSentiment(placeDetails.reviews);
+		}
 
 		return placeDetails;
 	} catch (e) {
@@ -460,6 +482,30 @@ app.get("/reviews/history", validJWTNeeded, async (req, res) => {
 	);
 
 	res.status(200).send(reviewHistoryWithLocation);
+});
+
+app.get("/reviews/report", validJWTNeeded, async (req, res) => {
+	const reportedReviews = await DBHelpers.getReportedReviews(pool);
+
+	const enhancedReportedReviews = await Promise.all(
+		reportedReviews.map(async (reportedReview) => {
+			const { userId, reviewId, reason } = reportedReview;
+			const [review] = await DBHelpers.getReviewByReviewId(pool, reviewId);
+			const placeDetails = await getPlaceDetails(review.placeId);
+			const [user] = await DBHelpers.getUserById(pool, userId);
+			const [author] = await DBHelpers.getUserById(pool, review.userId);
+
+			return {
+				...placeDetails,
+				reportedReview: review.text,
+				reportedReviewReason: reason,
+				reportedBy: user,
+				reviewAuthor: author,
+			};
+		})
+	);
+
+	res.status(200).send(enhancedReportedReviews);
 });
 
 const port = process.env.PORT || 3001;

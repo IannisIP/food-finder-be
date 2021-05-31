@@ -12,6 +12,13 @@ const getReviewsByUserId = async (pool, userId) => {
 	return result[0];
 };
 
+const getReviewByReviewId = async (pool, reviewId) => {
+	const result = await pool.query("SELECT * from reviews where id = ?", [
+		reviewId,
+	]);
+	return result[0];
+};
+
 const getPendingReviewsByUserId = async (pool, userId) => {
 	const result = await pool.query(
 		"SELECT * from pendingreviews where userId = ?",
@@ -55,6 +62,11 @@ const addUser = async (
 	return result;
 };
 
+const getReportedReviews = async (pool) => {
+	const result = await pool.query("SELECT * from reportedreviews");
+	return result[0];
+};
+
 module.exports = {
 	addUser,
 	getUserById,
@@ -64,4 +76,6 @@ module.exports = {
 	getReviewsByPlaceId,
 	getPendingReviewsByUserId,
 	getReviewsByUserId,
+	getReportedReviews,
+	getReviewByReviewId,
 };
