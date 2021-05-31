@@ -9,6 +9,7 @@ const jwt = require("jsonwebtoken");
 const config = require("./config");
 const Storage = require("./storage");
 const pify = require("pify");
+const DBHelpers = require("./helpers");
 
 require("events").EventEmitter.prototype._maxListeners = 100;
 
@@ -100,8 +101,11 @@ const getPlaceDetails = async (placeId) => {
 		);
 		const placeDetails = response.data.result;
 
-		const users = await getAllUsers();
-		const reviews = await getReviewsByPlaceId(placeDetails.reference);
+		const users = await DBHelpers.getAllUsers(pool);
+		const reviews = await DBHelpers.getReviewsByPlaceId(
+			pool,
+			placeDetails.reference
+		);
 
 		const userReviews = reviews.map((review) => {
 			const user = users.find((user) => user.id === review.userId);
@@ -133,45 +137,6 @@ app.get("/details", cors(corsOptions), async (req, res) => {
 	}
 });
 
-const getReviewsByPlaceId = async (placeId) => {
-	const result = await pool.query("SELECT * from reviews WHERE placeId = ?", [
-		placeId,
-	]);
-	return result[0];
-};
-
-const getAllPendingReviews = async () => {
-	const result = await pool.query("SELECT * from pendingreviews");
-	return result[0];
-};
-
-const getPendingReviewById = async (pendingReviewId) => {
-	const result = await pool.query("select * from pendingreviews WHERE id=?", [
-		pendingReviewId,
-	]);
-	return result[0];
-};
-
-const getAllUsers = async () => {
-	const result = await pool.query("SELECT * from users");
-	return result[0];
-};
-
-const getUserById = async (userId) => {
-	const result = await pool.query("SELECT * from users where id = ?", [userId]);
-	return result[0];
-};
-
-const addUser = async ({ name, email, password, firstName, lastName }) => {
-	const result = await pool.query("INSERT INTO users SET ?", {
-		email,
-		password,
-		first_name: firstName,
-		last_name: lastName,
-	});
-	return result;
-};
-
 app.post("/users", cors(corsOptions), async (req, res) => {
 	try {
 		const hashedPassword = await bcrypt.hash(req.body.password, 10);
@@ -181,7 +146,7 @@ app.post("/users", cors(corsOptions), async (req, res) => {
 			firstName: req.body.firstName,
 			lastName: req.body.lastName,
 		};
-		const users = await getAllUsers();
+		const users = await DBHelpers.getAllUsers(pool);
 		const exists = users.find((dbUser) => dbUser.email === user.email);
 		res.contentType("application/json");
 
@@ -194,7 +159,7 @@ app.post("/users", cors(corsOptions), async (req, res) => {
 			expiresIn: 86400, // expires in 24 hours
 		});
 
-		await addUser(user);
+		await DBHelpers.addUser(pool, user);
 		res
 			.status(200)
 			.send({ message: "user-added", auth: true, token: token, user: user });
@@ -209,7 +174,7 @@ app.get("/users/login");
 
 app.post("/users/login", cors(corsOptions), async (req, res) => {
 	const email = req.body.email;
-	const users = await getAllUsers();
+	const users = await DBHelpers.getAllUsers(pool);
 	const user = users.find((dbUser) => dbUser.email === email);
 
 	res.contentType("application/json");
@@ -252,7 +217,7 @@ const validateUser = async (token) => {
 					message: "Failed to authenticate token.",
 				});
 
-			const users = await getAllUsers();
+			const users = await DBHelpers.getAllUsers(pool);
 			const user = users.find((user) => user.email === userInfo.email);
 
 			resolve(user);
@@ -338,13 +303,13 @@ app.get(
 		res.contentType("application/json");
 
 		try {
-			const pendingreviews = await getAllPendingReviews();
+			const pendingreviews = await DBHelpers.getAllPendingReviews(pool);
 			const placeReviews = await Promise.all(
 				pendingreviews.map(async (pendingReview) => {
 					const { id, placeId, userId, text, receipt, timestamp } =
 						pendingReview;
 					const placeDetails = await getPlaceDetails(placeId);
-					const reviewer = await getUserById(userId);
+					const reviewer = await DBHelpers.getUserById(pool, userId);
 
 					return {
 						...placeDetails,
@@ -368,7 +333,7 @@ app.post("/reviews", cors(corsOptions), validJWTNeeded, async (req, res) => {
 	const pendingReviewId = req.body.id;
 	const operation = req.body.operation;
 
-	const [review] = await getPendingReviewById(pendingReviewId);
+	const [review] = await DBHelpers.getPendingReviewById(pool, pendingReviewId);
 
 	try {
 		if (operation === "accept") {
@@ -438,7 +403,10 @@ app.post("/blacklist", cors(corsOptions), async (req, res) => {
 app.get("/receipt/download", validJWTNeeded, async (req, res) => {
 	const pendingReviewId = parseInt(req.query.review);
 
-	const [{ receipt }] = await getPendingReviewById(pendingReviewId);
+	const [{ receipt }] = await DBHelpers.getPendingReviewById(
+		pool,
+		pendingReviewId
+	);
 
 	const file = `${receipt}`;
 	res.status(200).download(file, (error) => {
@@ -447,6 +415,26 @@ app.get("/receipt/download", validJWTNeeded, async (req, res) => {
 			res.status(500).send({ message: "Failed to retrieve receipt!" });
 		}
 	});
+});
+
+app.get("/reviews/history", validJWTNeeded, async (req, res) => {
+	const email = req.jwt.email;
+
+	const users = await DBHelpers.getAllUsers(pool);
+	const user = users.find((dbUser) => dbUser.email === email);
+
+	const reviews = await DBHelpers.getReviewsByUserId(pool, user.id);
+	const pendingReviews = await DBHelpers.getPendingReviewsByUserId(
+		pool,
+		user.id
+	);
+
+	const enhancedPendingReviews = pendingReviews.map((pendingReview) => ({
+		...pendingReview,
+		status: "pending",
+	}));
+
+	res.status(200).send({ reviews: [...reviews, ...enhancedPendingReviews] });
 });
 
 const port = process.env.PORT || 3001;

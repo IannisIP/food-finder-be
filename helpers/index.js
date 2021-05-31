@@ -1,0 +1,67 @@
+const getReviewsByPlaceId = async (pool, placeId) => {
+	const result = await pool.query("SELECT * from reviews WHERE placeId = ?", [
+		placeId,
+	]);
+	return result[0];
+};
+
+const getReviewsByUserId = async (pool, userId) => {
+	const result = await pool.query("SELECT * from reviews where userId = ?", [
+		userId,
+	]);
+	return result[0];
+};
+
+const getPendingReviewsByUserId = async (pool, userId) => {
+	const result = await pool.query(
+		"SELECT * from pendingreviews where userId = ?",
+		[userId]
+	);
+	return result[0];
+};
+
+const getAllPendingReviews = async (pool) => {
+	const result = await pool.query("SELECT * from pendingreviews");
+	return result[0];
+};
+
+const getPendingReviewById = async (pool, pendingReviewId) => {
+	const result = await pool.query("select * from pendingreviews WHERE id=?", [
+		pendingReviewId,
+	]);
+	return result[0];
+};
+
+const getAllUsers = async (pool) => {
+	const result = await pool.query("SELECT * from users");
+	return result[0];
+};
+
+const getUserById = async (pool, userId) => {
+	const result = await pool.query("SELECT * from users where id = ?", [userId]);
+	return result[0];
+};
+
+const addUser = async (
+	pool,
+	{ name, email, password, firstName, lastName }
+) => {
+	const result = await pool.query("INSERT INTO users SET ?", {
+		email,
+		password,
+		first_name: firstName,
+		last_name: lastName,
+	});
+	return result;
+};
+
+module.exports = {
+	addUser,
+	getUserById,
+	getAllUsers,
+	getPendingReviewById,
+	getAllPendingReviews,
+	getReviewsByPlaceId,
+	getPendingReviewsByUserId,
+	getReviewsByUserId,
+};
