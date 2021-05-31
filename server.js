@@ -114,6 +114,8 @@ const getPlaceDetails = async (placeId) => {
 				author_name: `${user["first_name"]} ${user["last_name"]}`,
 				text: review.text,
 				confirmed: review.receipt ? true : false,
+				source: "db",
+				reviewId: review.id,
 			};
 		});
 
@@ -358,27 +360,35 @@ app.post("/reviews", cors(corsOptions), validJWTNeeded, async (req, res) => {
 	res.status(201).json({ message: "Operation completed" });
 });
 
-app.post("/reportedreviews", cors(corsOptions), async (req, res) => {
-	const reportedReview = {
-		userId: req.body.userId,
-		reviewId: req.body.reviewId,
-		reason: req.body.reason,
-	};
+app.post(
+	"/reviews/report",
+	cors(corsOptions),
+	validJWTNeeded,
+	async (req, res) => {
+		const email = req.jwt.email;
 
-	try {
-		await pool.query("INSERT INTO reportedreviews SET ?", {
-			userId: reportedReview.userId,
-			reviewId: reportedReview.reviewId,
-			reason: reportedReview.reason,
-		});
-	} catch (e) {
-		console.error(e);
-		res.status(500).send(e);
+		const users = await DBHelpers.getAllUsers(pool);
+		const user = users.find((dbUser) => dbUser.email === email);
+
+		const reportedReview = {
+			reviewId: req.body.id,
+			reason: req.body.reason,
+		};
+
+		try {
+			await pool.query(
+				"INSERT INTO reportedreviews (userId,reviewId,reason) VALUES(?,?,?)",
+				[user.id, reportedReview.reviewId, reportedReview.reason]
+			);
+		} catch (e) {
+			console.error(e);
+			res.status(500).send(e);
+		}
+		res.contentType("application/json");
+
+		res.status(201).json({ message: "reported-review-submitted" });
 	}
-	res.contentType("application/json");
-
-	res.status(201).json({ message: "reported-review-added" });
-});
+);
 
 app.post("/blacklist", cors(corsOptions), async (req, res) => {
 	const reportedReview = {
@@ -434,7 +444,22 @@ app.get("/reviews/history", validJWTNeeded, async (req, res) => {
 		status: "pending",
 	}));
 
-	res.status(200).send({ reviews: [...reviews, ...enhancedPendingReviews] });
+	const allReviews = [...reviews, ...enhancedPendingReviews];
+
+	const reviewHistoryWithLocation = await Promise.all(
+		allReviews.map(async (review) => {
+			const { id, placeId, userId, text, receipt, timestamp } = review;
+			const placeDetails = await getPlaceDetails(placeId);
+
+			return {
+				...placeDetails,
+				reviewText: text,
+				reviewDate: timestamp,
+			};
+		})
+	);
+
+	res.status(200).send(reviewHistoryWithLocation);
 });
 
 const port = process.env.PORT || 3001;
