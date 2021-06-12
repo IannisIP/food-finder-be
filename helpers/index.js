@@ -27,6 +27,14 @@ const getPendingReviewsByUserId = async (pool, userId) => {
 	return result[0];
 };
 
+const getReviewsByReceiptParams = async (pool, receiptParams) => {
+	const result = await pool.query(
+		"SELECT * from reviews where receiptParams = ?",
+		[receiptParams]
+	);
+	return result[0];
+};
+
 const getAllPendingReviews = async (pool) => {
 	const result = await pool.query("SELECT * from pendingreviews");
 	return result[0];
@@ -76,6 +84,7 @@ module.exports = {
 	getReviewsByPlaceId,
 	getPendingReviewsByUserId,
 	getReviewsByUserId,
+	getReviewsByReceiptParams,
 	getReportedReviews,
 	getReviewByReviewId,
 };

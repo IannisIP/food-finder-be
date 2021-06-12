@@ -356,14 +356,30 @@ app.get(
 app.post("/reviews", cors(corsOptions), validJWTNeeded, async (req, res) => {
 	const pendingReviewId = req.body.id;
 	const operation = req.body.operation;
+	const receiptParams = req.body.receiptParams;
 
 	const [review] = await DBHelpers.getPendingReviewById(pool, pendingReviewId);
 
+	const [reviews] = await DBHelpers.getReviewsByReceiptParams(
+		pool,
+		receiptParams
+	);
+
 	try {
 		if (operation === "accept") {
+			if (reviews) {
+				res.status(500).json({ message: "Receipt already used" });
+				return;
+			}
 			await pool.query(
-				"INSERT INTO reviews (userId,placeId,text,receipt,timestamp) VALUES(?,?,?,?, NOW())",
-				[review.userId, review.placeId, review.text, review.receipt]
+				"INSERT INTO reviews (userId,placeId,text,receipt,timestamp, receiptParams) VALUES(?,?,?,?, NOW(), ?)",
+				[
+					review.userId,
+					review.placeId,
+					review.text,
+					review.receipt,
+					receiptParams,
+				]
 			);
 			await pool.query("DELETE FROM pendingreviews WHERE id = ?", [
 				pendingReviewId,
