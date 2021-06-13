@@ -398,6 +398,19 @@ app.post("/reviews", cors(corsOptions), validJWTNeeded, async (req, res) => {
 	res.status(201).json({ message: "Operation completed" });
 });
 
+app.delete("/reviews", validJWTNeeded, async (req, res) => {
+	const id = req.body.id;
+	const reportId = req.body.reportedId;
+	try {
+		const report = await DBHelpers.removeReportById(pool, reportId);
+		const reportedReviews = await DBHelpers.removeReviewById(pool, id);
+	} catch (e) {
+		console.error(e);
+		res.status(500).send(e);
+	}
+	res.status(201).send({ message: "Review deleted" });
+});
+
 app.post(
 	"/reviews/report",
 	cors(corsOptions),
@@ -505,7 +518,7 @@ app.get("/reviews/report", validJWTNeeded, async (req, res) => {
 
 	const enhancedReportedReviews = await Promise.all(
 		reportedReviews.map(async (reportedReview) => {
-			const { userId, reviewId, reason } = reportedReview;
+			const { userId, reviewId, reason, id } = reportedReview;
 			const [review] = await DBHelpers.getReviewByReviewId(pool, reviewId);
 			const placeDetails = await getPlaceDetails(review.placeId);
 			const [user] = await DBHelpers.getUserById(pool, userId);
@@ -513,10 +526,16 @@ app.get("/reviews/report", validJWTNeeded, async (req, res) => {
 
 			return {
 				...placeDetails,
-				reportedReview: review.text,
-				reportedReviewReason: reason,
-				reportedBy: user,
-				reviewAuthor: author,
+				review: {
+					author,
+					text: review.text,
+					id: review.id,
+				},
+				reported: {
+					id,
+					reason,
+					user,
+				},
 			};
 		})
 	);
@@ -524,6 +543,17 @@ app.get("/reviews/report", validJWTNeeded, async (req, res) => {
 	res.status(200).send(enhancedReportedReviews);
 });
 
+app.delete("/reviews/report", validJWTNeeded, async (req, res) => {
+	const id = req.body.id;
+
+	try {
+		const report = await DBHelpers.removeReportById(pool, id);
+	} catch (e) {
+		console.error(e);
+		res.status(500).send(e);
+	}
+	res.status(201).send({ message: "Report deleted" });
+});
 const port = process.env.PORT || 3001;
 
 app.listen(port, () => console.log("Server started."));

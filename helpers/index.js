@@ -19,6 +19,18 @@ const getReviewByReviewId = async (pool, reviewId) => {
 	return result[0];
 };
 
+const removeReportById = async (pool, id) => {
+	const result = await pool.query("DELETE from reportedreviews where id = ?", [
+		id,
+	]);
+	return result[0];
+};
+
+const removeReviewById = async (pool, id) => {
+	const result = await pool.query("DELETE from reviews where id = ?", [id]);
+	return result[0];
+};
+
 const getPendingReviewsByUserId = async (pool, userId) => {
 	const result = await pool.query(
 		"SELECT * from pendingreviews where userId = ?",
@@ -87,4 +99,6 @@ module.exports = {
 	getReviewsByReceiptParams,
 	getReportedReviews,
 	getReviewByReviewId,
+	removeReviewById,
+	removeReportById,
 };
