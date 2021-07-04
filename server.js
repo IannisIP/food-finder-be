@@ -257,7 +257,11 @@ const validJWTNeeded = (req, res, next) => {
 
 			return next();
 		} catch (err) {
-			return res.status(403).send();
+			return res
+				.status(403)
+				.send({
+					message: "Forbidden: Authentication token expired or non existent",
+				});
 		}
 	} else {
 		return res.status(401).send();
