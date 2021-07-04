@@ -23,6 +23,4 @@ const analyseText = (text) => {
 		.reduce(sum);
 };
 
-//folosire translate pt unicitate limba
-
 module.exports = { analyseText };

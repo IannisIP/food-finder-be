@@ -175,7 +175,7 @@ app.post("/users", cors(corsOptions), async (req, res) => {
 		res.contentType("application/json");
 
 		if (exists) {
-			res.status(500).send('{"message":"users-exists"}');
+			res.status(500).send({ message: "user-exists" });
 			return;
 		}
 
@@ -286,38 +286,43 @@ app.post("/analyse", cors(corsOptions), (req, res) => {
 	res.json(`{sentiment: ${sentiment}}`);
 });
 
-app.post("/reviews/pending", cors(corsOptions), async (req, res) => {
-	const token = req.headers["x-access-token"];
-	const user = await validateUser(token);
-	const multerInstance = pify(Storage.upload(user.id).single("receipt"));
+app.post(
+	"/reviews/pending",
+	cors(corsOptions),
+	validJWTNeeded,
+	async (req, res) => {
+		const token = req.headers["x-access-token"];
+		const user = await validateUser(token);
+		const multerInstance = pify(Storage.upload(user.id).single("receipt"));
 
-	try {
-		await multerInstance(req, res);
-	} catch (err) {
-		console.log(err);
-		// An error occurred when uploading
+		try {
+			await multerInstance(req, res);
+		} catch (err) {
+			console.log(err);
+			// An error occurred when uploading
+		}
+
+		const review = {
+			userId: user.id,
+			placeId: req.body.placeId,
+			text: req.body.review,
+			receipt: req.file ? req.file.path : "",
+		};
+
+		try {
+			await pool.query(
+				"INSERT INTO pendingreviews (userId,placeId,text,receipt,timestamp) VALUES(?,?,?,?, NOW())",
+				[review.userId, review.placeId, review.text, review.receipt]
+			);
+		} catch (e) {
+			console.error(e);
+			res.status(500).send(e);
+		}
+		res.contentType("application/json");
+
+		res.status(201).json({ message: "review-added" });
 	}
-
-	const review = {
-		userId: user.id,
-		placeId: req.body.placeId,
-		text: req.body.review,
-		receipt: req.file ? req.file.path : "",
-	};
-
-	try {
-		await pool.query(
-			"INSERT INTO pendingreviews (userId,placeId,text,receipt,timestamp) VALUES(?,?,?,?, NOW())",
-			[review.userId, review.placeId, review.text, review.receipt]
-		);
-	} catch (e) {
-		console.error(e);
-		res.status(500).send(e);
-	}
-	res.contentType("application/json");
-
-	res.status(201).json({ message: "review-added" });
-});
+);
 
 app.get(
 	"/reviews/pending",
@@ -554,6 +559,24 @@ app.delete("/reviews/report", validJWTNeeded, async (req, res) => {
 	}
 	res.status(201).send({ message: "Report deleted" });
 });
+
+app.post("/process-receipt", validJWTNeeded, async (req, res) => {
+	const pendingReviewId = req.body.pendingReviewId;
+
+	try {
+		const pendingReview = await DBHelpers.getPendingReviewById(
+			pool,
+			pendingReviewId
+		);
+		const receipt = await Storage.getTextFromImage(pendingReview[0].receipt);
+
+		res.status(200).send(receipt);
+	} catch (e) {
+		console.error(e);
+		res.send(500);
+	}
+});
+
 const port = process.env.PORT || 3001;
 
 app.listen(port, () => console.log("Server started."));
