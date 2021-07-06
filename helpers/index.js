@@ -87,6 +87,18 @@ const getReportedReviews = async (pool) => {
 	return result[0];
 };
 
+const getBlockedUsers = async (pool) => {
+	const result = await pool.query("SELECT * from blacklist");
+	return result[0];
+};
+
+const getBlockedUserById = async (pool, userId) => {
+	const result = await pool.query("SELECT * from blacklist where userId = ?", [
+		userId,
+	]);
+	return result[0];
+};
+
 module.exports = {
 	addUser,
 	getUserById,
@@ -101,4 +113,6 @@ module.exports = {
 	getReviewByReviewId,
 	removeReviewById,
 	removeReportById,
+	getBlockedUsers,
+	getBlockedUserById,
 };

@@ -175,7 +175,7 @@ app.post("/users", cors(corsOptions), async (req, res) => {
 		res.contentType("application/json");
 
 		if (exists) {
-			res.status(500).send({ message: "user-exists" });
+			res.status(500).send({ message: "User already exists", type: "error" });
 			return;
 		}
 
@@ -186,7 +186,7 @@ app.post("/users", cors(corsOptions), async (req, res) => {
 		await DBHelpers.addUser(pool, user);
 		res
 			.status(200)
-			.send({ message: "user-added", auth: true, token: token, user: user });
+			.send({ message: "User created", auth: true, token: token, user: user });
 	} catch (err) {
 		console.log(err);
 
@@ -204,7 +204,7 @@ app.post("/users/login", cors(corsOptions), async (req, res) => {
 	res.contentType("application/json");
 
 	if (!user) {
-		return res.status(400).send('{"message": "Cannot find user"}');
+		return res.status(400).send({ message: "Cannot find user", type: "error" });
 	}
 	try {
 		const passwordIsValid = bcrypt.compareSync(
@@ -223,6 +223,7 @@ app.post("/users/login", cors(corsOptions), async (req, res) => {
 				message: "Username or password wrong",
 				auth: false,
 				token: null,
+				type: "error",
 			});
 		}
 	} catch (e) {
@@ -257,11 +258,10 @@ const validJWTNeeded = (req, res, next) => {
 
 			return next();
 		} catch (err) {
-			return res
-				.status(403)
-				.send({
-					message: "Forbidden: Authentication token expired or non existent",
-				});
+			return res.status(403).send({
+				message: "Forbidden: Authentication token expired or non existent",
+				type: "error",
+			});
 		}
 	} else {
 		return res.status(401).send();
@@ -324,7 +324,7 @@ app.post(
 		}
 		res.contentType("application/json");
 
-		res.status(201).json({ message: "review-added" });
+		res.status(201).json({ message: "Review added" });
 	}
 );
 
@@ -429,6 +429,16 @@ app.post(
 
 		const users = await DBHelpers.getAllUsers(pool);
 		const user = users.find((dbUser) => dbUser.email === email);
+		const [blockedUser] = await DBHelpers.getBlockedUserById(pool, user.id);
+
+		if (blockedUser) {
+			res.status(403).send({
+				message: "User is blocked from submitting new reports",
+				type: "error",
+			});
+
+			return;
+		}
 
 		const reportedReview = {
 			reviewId: req.body.id,
@@ -446,29 +456,9 @@ app.post(
 		}
 		res.contentType("application/json");
 
-		res.status(201).json({ message: "reported-review-submitted" });
+		res.status(201).json({ message: "Review reported" });
 	}
 );
-
-app.post("/blacklist", cors(corsOptions), async (req, res) => {
-	const reportedReview = {
-		userId: req.body.userId,
-		reason: req.body.reason,
-	};
-
-	try {
-		await pool.query("INSERT INTO blacklist SET ?", {
-			userId: reportedReview.userId,
-			reason: reportedReview.reason,
-		});
-	} catch (e) {
-		console.error(e);
-		res.status(500).send(e);
-	}
-	res.contentType("application/json");
-
-	res.status(201).json({ message: "reported-review-added" });
-});
 
 app.get("/receipt/download", validJWTNeeded, async (req, res) => {
 	const pendingReviewId = parseInt(req.query.review);
@@ -482,7 +472,9 @@ app.get("/receipt/download", validJWTNeeded, async (req, res) => {
 	res.status(200).download(file, (error) => {
 		if (error) {
 			console.error(error);
-			res.status(500).send({ message: "Failed to retrieve receipt!" });
+			res
+				.status(500)
+				.send({ message: "Failed to retrieve receipt", type: "error" });
 		}
 	});
 });
@@ -580,6 +572,69 @@ app.post("/process-receipt", validJWTNeeded, async (req, res) => {
 		res.send(500);
 	}
 });
+
+app.get("/blacklist", validJWTNeeded, async (req, res) => {
+	try {
+		const blockedUsers = await DBHelpers.getBlockedUsers(pool);
+		const enhancedblockedUsers = await Promise.all(
+			blockedUsers.map(async (blockedUser) => {
+				const { userId, reason } = blockedUser;
+				const [user] = await DBHelpers.getUserById(pool, userId);
+
+				return {
+					id: user.id,
+					name: user["first_name"] + " " + user["last_name"],
+					email: user.email,
+					reason,
+				};
+			})
+		);
+
+		res.status(200).send(enhancedblockedUsers);
+	} catch (e) {
+		console.error(e);
+		res.status(500).send(e);
+	}
+});
+
+app.post("/blacklist", cors(corsOptions), validJWTNeeded, async (req, res) => {
+	const userId = req.body.userId;
+	const reason = req.body.reason;
+
+	try {
+		await pool.query("INSERT INTO blacklist SET ?", {
+			userId,
+			reason,
+		});
+	} catch (e) {
+		console.error(e);
+		res.status(500).send(e);
+	}
+	res.contentType("application/json");
+
+	res.status(201).json({ message: "User added to blacklist" });
+});
+
+app.delete(
+	"/blacklist",
+	cors(corsOptions),
+	validJWTNeeded,
+	async (req, res) => {
+		const userId = req.body.userId;
+
+		try {
+			await pool.query("DELETE FROM blacklist where userId = ?", {
+				userId,
+			});
+		} catch (e) {
+			console.error(e);
+			res.status(500).send(e);
+		}
+		res.contentType("application/json");
+
+		res.status(201).json({ message: "User removed from blacklist" });
+	}
+);
 
 const port = process.env.PORT || 3001;
 
