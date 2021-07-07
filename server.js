@@ -623,9 +623,7 @@ app.delete(
 		const userId = req.body.userId;
 
 		try {
-			await pool.query("DELETE FROM blacklist where userId = ?", {
-				userId,
-			});
+			await pool.query("DELETE FROM blacklist where userId = ?", [userId]);
 		} catch (e) {
 			console.error(e);
 			res.status(500).send(e);
